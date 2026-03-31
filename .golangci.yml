@@ -1,0 +1,43 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - prealloc
+    - revive
+    - godot
+    - exportloopref
+    - nilerr
+    - bodyclose
+    - exhaustive
+
+linters-settings:
+  godot:
+    scope: declarations
+    capital: false
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+  goimports:
+    local-prefixes: github.com/lignumqt/taskglow
+
+issues:
+  exclude-rules:
+    # Allow dot imports in tests
+    - path: _test\.go
+      linters:
+        - revive
+    # Allow long lines in examples
+    - path: examples/
+      linters:
+        - revive
