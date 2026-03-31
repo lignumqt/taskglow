@@ -8,10 +8,10 @@
 // Basic usage:
 //
 //	err := taskglow.Wrap(ctx, "Deploying", func(ctx context.Context, t *taskglow.Task) error {
-//	   t.Progress(0.3, "fetching artifacts")
-//	   t.Stage("Build", 1, 3)
-//	   t.Log("compiled 42 files")
-//	   return nil
+//	  t.Progress(0.3, "fetching artifacts")
+//	  t.Stage("Build", 1, 3)
+//	  t.Log("compiled 42 files")
+//	  return nil
 //	})
 package taskglow
 
@@ -53,7 +53,7 @@ func (r *Runner) Run(ctx context.Context, title string, fn TaskFunc) (err error)
 	taskCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	t := newTask(taskCtx, cancel, title, renderer)
+	t := newTask(taskCtx, cancel, title, renderer, r.opts.onLog, r.opts.onWarn)
 	startedAt := time.Now()
 
 	// Catch panics in the user callback and convert them to errors.
@@ -102,19 +102,37 @@ func (r *Runner) Run(ctx context.Context, title string, fn TaskFunc) (err error)
 		state = StateSucceeded
 	}
 
-	elapsed := FormatElapsed(time.Since(startedAt))
+	elapsed := time.Since(startedAt)
 
 	fs := render.FinishState{
 		Title:     title,
 		StateCode: int(state),
 		StateStr:  state.String(),
-		Elapsed:   elapsed,
+		Elapsed:   FormatElapsed(elapsed),
 		Err:       fnErr,
 		Hint:      hint,
 		Logs:      logs,
 		Warnings:  warnings,
 	}
 	renderer.Finish(fs)
+
+	// Write structured log to file if configured.
+	if r.opts.logFile != nil {
+		r.writeLogFile(r.opts.logFile, title, logs, warnings, fs)
+	}
+
+	// Fire OnFinish hook.
+	if r.opts.onFinish != nil {
+		r.opts.onFinish(Summary{
+			Title:    title,
+			State:    state,
+			Err:      fnErr,
+			Hint:     hint,
+			Elapsed:  elapsed,
+			Logs:     logs,
+			Warnings: warnings,
+		})
+	}
 
 	if state == StateFailed {
 		return fnErr
@@ -126,6 +144,32 @@ func (r *Runner) Run(ctx context.Context, title string, fn TaskFunc) (err error)
 		return context.Canceled
 	}
 	return nil
+}
+
+// writeLogFile writes a structured plain-text log of the task to w.
+func (r *Runner) writeLogFile(w io.Writer, title string, logs, warnings []string, fs render.FinishState) {
+	fmt.Fprintf(w, "» %s\n", title)
+	for _, warn := range warnings {
+		fmt.Fprintf(w, "  warn: %s\n", warn)
+	}
+	for _, l := range logs {
+		fmt.Fprintf(w, "  log: %s\n", l)
+	}
+	switch fs.StateCode {
+	case int(StateSucceeded):
+		fmt.Fprintf(w, "✓ %s [%s]\n", fs.Title, fs.Elapsed)
+	case int(StateFailed):
+		if fs.Err != nil {
+			fmt.Fprintf(w, "✗ %s: %v [%s]\n", fs.Title, fs.Err, fs.Elapsed)
+		} else {
+			fmt.Fprintf(w, "✗ %s [%s]\n", fs.Title, fs.Elapsed)
+		}
+		if fs.Hint != "" {
+			fmt.Fprintf(w, "  hint: %s\n", fs.Hint)
+		}
+	case int(StateCanceled):
+		fmt.Fprintf(w, "⊘ %s (canceled) [%s]\n", fs.Title, fs.Elapsed)
+	}
 }
 
 // buildRenderer selects and constructs the appropriate renderer.

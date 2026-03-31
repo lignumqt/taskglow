@@ -61,7 +61,9 @@ func main() {
 | Method | Description |
 |---|---|
 | `t.Log(msg)` | Append an informational log line |
+| `t.Logf(format, args...)` | Formatted log line |
 | `t.Warn(msg)` | Append a warning (shows in yellow; marks task as warned) |
+| `t.Warnf(format, args...)` | Formatted warning |
 | `t.Stage(name, current, total)` | Announce the current pipeline stage |
 | `t.Progress(pct, msg)` | Update progress bar (0.0–1.0) with optional message |
 | `t.SetHint(msg)` | Set a hint printed on failure |
@@ -76,8 +78,10 @@ runner := taskglow.New(
     taskglow.WithRenderInterval(100*time.Millisecond),
     taskglow.WithSpinnerFrames([]string{"◐","◓","◑","◒"}),
     taskglow.WithNoColor(true),
-    taskglow.WithSummary(true),             // print elapsed summary
-)
+    taskglow.WithSummary(true),             // print elapsed summary    taskglow.WithLogFile(logFile),          // write all logs to a file
+    taskglow.WithOnFinish(func(s taskglow.Summary) { /* metrics, alerts */ }),
+    taskglow.WithOnLog(func(msg string) { /* forward to slog */ }),
+    taskglow.WithOnWarn(func(msg string) { /* forward to slog */ }),)
 ```
 
 ### Modes
@@ -103,6 +107,29 @@ if verbose {
 
 err := taskglow.New(taskglow.WithMode(mode)).Run(ctx, "Deploy", fn)
 ```
+
+## Parallel Tasks (Group)
+
+`Group` runs multiple tasks **concurrently**, rendering them as a live stacked
+list of spinner rows in TTY or safely interleaved plain lines in CI.
+
+```go
+g := taskglow.NewGroup(ctx)
+g.Go("Build frontend", buildFn)
+g.Go("Build backend",  compileFn)
+g.Go("Run migrations", migrateFn)
+
+if err := g.Wait(); err != nil {
+    log.Fatal(err)
+}
+
+// Per-task summaries available afterwards:
+for _, r := range g.Results() {
+    fmt.Printf("%s: %s\n", r.Title, r.Summary.State)
+}
+```
+
+All `Option` values accepted by `New` (modes, hooks, log file) also work with `NewGroup`.
 
 ## Adapters
 
@@ -150,6 +177,41 @@ mux.HandleFunc("/api/deploy", httpadapter.Handler("API deploy",
 http.Handle("/", httpadapter.Middleware()(existingHandler))
 ```
 
+### OpenTelemetry
+
+Each `Run` call opens a tracing span. Log lines become span events, warnings
+become events with a `warning=true` attribute, and the span status reflects the
+final task outcome. The span context is propagated into the task function so
+child spans can be created normally.
+
+```go
+import (
+    taskglowotel "github.com/lignumqt/taskglow/adapters/otel"
+    "go.opentelemetry.io/otel"
+)
+
+tracer := otel.Tracer("my-service")
+runner := taskglowotel.New(tracer, taskglow.WithMode(taskglow.ModeAuto))
+
+err := runner.Run(ctx, "Deploy", func(ctx context.Context, t *taskglow.Task) error {
+    t.Log("preparing release")
+    // ctx carries the span — child spans nest automatically
+    return deploy(ctx)
+})
+```
+
+Parallel tasks via `Group`:
+
+```go
+grp := taskglowotel.NewGroup(ctx, tracer)
+grp.Go("Build",  buildFn)
+grp.Go("Test",   testFn)
+err := grp.Wait()  // parent "group" span + one child span per task
+```
+
+> **Note:** do not pass `WithOnLog`, `WithOnWarn` or `WithOnFinish` in opts
+> when using the OTel adapter — those hooks are used internally.
+
 ## Examples
 
 ```sh
@@ -157,6 +219,8 @@ go run ./examples/basic/...     # minimal Wrap() usage
 go run ./examples/progress/...  # progress bar + stages
 go run ./examples/stages/...    # multi-step pipeline
 go run ./examples/verbose/...   # ModeVerbose: logs stay on screen after finish
+go run ./examples/group/...     # parallel tasks with Group
+go run ./examples/otel/...      # OpenTelemetry spans (stdout exporter)
 ```
 
 ## Development

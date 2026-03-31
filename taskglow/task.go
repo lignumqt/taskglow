@@ -2,6 +2,7 @@ package taskglow
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,9 +22,13 @@ type Task struct {
 	logs      []string
 	warnings  []string
 	startedAt time.Time
+
+	// optional callbacks wired in from options
+	onLog  func(string)
+	onWarn func(string)
 }
 
-func newTask(ctx context.Context, cancel context.CancelFunc, title string, r render.Renderer) *Task {
+func newTask(ctx context.Context, cancel context.CancelFunc, title string, r render.Renderer, onLog, onWarn func(string)) *Task {
 	return &Task{
 		ctx:       ctx,
 		cancel:    cancel,
@@ -31,6 +36,8 @@ func newTask(ctx context.Context, cancel context.CancelFunc, title string, r ren
 		state:     StateRunning,
 		title:     title,
 		startedAt: time.Now(),
+		onLog:     onLog,
+		onWarn:    onWarn,
 	}
 }
 
@@ -61,6 +68,9 @@ func (t *Task) Log(msg string) {
 	t.logs = append(t.logs, msg)
 	t.mu.Unlock()
 	t.renderer.Update(render.Event{Kind: render.EventLog, Message: msg})
+	if t.onLog != nil {
+		t.onLog(msg)
+	}
 }
 
 // Stage reports a named stage transition.
@@ -78,8 +88,14 @@ func (t *Task) Stage(name string, current, total int) {
 func (t *Task) Warn(msg string) {
 	t.mu.Lock()
 	t.warnings = append(t.warnings, msg)
+	if t.state == StateRunning {
+		t.state = StateWarning
+	}
 	t.mu.Unlock()
 	t.renderer.Update(render.Event{Kind: render.EventWarn, Message: msg})
+	if t.onWarn != nil {
+		t.onWarn(msg)
+	}
 }
 
 // SetHint sets an optional hint shown to the user when the task fails.
@@ -124,4 +140,14 @@ func (t *Task) snapshot() (state State, hint string, logs []string, warnings []s
 	warnings = make([]string, len(t.warnings))
 	copy(warnings, t.warnings)
 	return t.state, t.hint, logs, warnings
+}
+
+// Logf formats and appends a log line, like fmt.Sprintf.
+func (t *Task) Logf(format string, args ...any) {
+	t.Log(fmt.Sprintf(format, args...))
+}
+
+// Warnf formats and appends a warning, like fmt.Sprintf.
+func (t *Task) Warnf(format string, args ...any) {
+	t.Warn(fmt.Sprintf(format, args...))
 }

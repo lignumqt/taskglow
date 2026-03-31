@@ -20,7 +20,7 @@ const (
 	ModePlain
 	// ModeQuiet suppresses all output except the final summary.
 	ModeQuiet
-	// ModeVerbose enables verbose output including all log messages.
+	// ModeVerbose enables verbose output: spinner during run, all logs kept after finish.
 	ModeVerbose
 )
 
@@ -35,6 +35,10 @@ type options struct {
 	noColor         bool
 	indentSize      int
 	summaryOnFinish bool
+	logFile         io.Writer
+	onFinish        func(Summary)
+	onLog           func(msg string)
+	onWarn          func(msg string)
 }
 
 func defaultOptions() options {
@@ -85,6 +89,32 @@ func WithNoColor(v bool) Option {
 // WithSummary controls whether a summary is printed after task completion.
 func WithSummary(v bool) Option {
 	return func(o *options) { o.summaryOnFinish = v }
+}
+
+// WithLogFile writes all log and warning lines, plus the final summary, to w
+// independently of the terminal renderer. Useful for audit trails.
+// The caller is responsible for closing the writer after the Runner is done.
+func WithLogFile(w io.Writer) Option {
+	return func(o *options) { o.logFile = w }
+}
+
+// WithOnFinish registers a callback invoked once after a task completes.
+// It receives a [Summary] with the full task result. The callback runs in the
+// same goroutine as Run, after the renderer has been stopped.
+func WithOnFinish(fn func(Summary)) Option {
+	return func(o *options) { o.onFinish = fn }
+}
+
+// WithOnLog registers a callback invoked for each call to [Task.Log].
+// The callback must be non-blocking and safe for concurrent use.
+func WithOnLog(fn func(msg string)) Option {
+	return func(o *options) { o.onLog = fn }
+}
+
+// WithOnWarn registers a callback invoked for each call to [Task.Warn].
+// The callback must be non-blocking and safe for concurrent use.
+func WithOnWarn(fn func(msg string)) Option {
+	return func(o *options) { o.onWarn = fn }
 }
 
 // defaultSpinnerFrames is the default braille-dot spinner animation.
